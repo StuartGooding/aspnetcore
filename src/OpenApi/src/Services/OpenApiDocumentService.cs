@@ -23,6 +23,9 @@ internal sealed class OpenApiDocumentService(
     IServiceProvider serviceProvider)
 {
     private readonly OpenApiOptions _options = optionsMonitor.Get(documentName);
+    private readonly OpenApiComponentService _componentService = serviceProvider.GetRequiredKeyedService<OpenApiComponentService>(documentName);
+
+    private static readonly OpenApiEncoding _defaultFormEncoding = new OpenApiEncoding { Style = ParameterStyle.Form, Explode = true };
 
     /// <summary>
     /// Cache of <see cref="OpenApiOperationTransformerContext"/> instances keyed by the
@@ -118,7 +121,7 @@ internal sealed class OpenApiDocumentService(
         return operations;
     }
 
-    private static OpenApiOperation GetOperation(ApiDescription description, HashSet<OpenApiTag> capturedTags)
+    private OpenApiOperation GetOperation(ApiDescription description, HashSet<OpenApiTag> capturedTags)
     {
         var tags = GetTags(description);
         if (tags != null)
@@ -132,6 +135,7 @@ internal sealed class OpenApiDocumentService(
         {
             Summary = GetSummary(description),
             Description = GetDescription(description),
+            RequestBody = GetRequestBody(description),
             Tags = tags,
         };
         return operation;
@@ -153,5 +157,81 @@ internal sealed class OpenApiDocumentService(
         // If no tags are specified, use the controller name as the tag. This effectively
         // allows us to group endpoints by the "resource" concept (e.g. users, todos, etc.)
         return [new OpenApiTag { Name = description.ActionDescriptor.RouteValues["controller"] }];
+    }
+
+    private OpenApiRequestBody? GetRequestBody(ApiDescription description)
+    {
+        // Only one parameter can be bound from the body in each request.
+        if (description.TryGetBodyParameter(out var bodyParameter))
+        {
+            return GetJsonRequestBody(description, bodyParameter);
+        }
+        // If there are no body parameters, check for form parameters.
+        // Note: Form parameters and body parameters cannot exist simultaneously
+        // in the same endpoint.
+        if (description.TryGetFormParameters(out var formParameters))
+        {
+            return GetFormRequestBody(description, formParameters);
+        }
+        return null;
+    }
+
+    private OpenApiRequestBody GetFormRequestBody(ApiDescription description, IEnumerable<ApiParameterDescription> formParameters)
+    {
+        var supportedRequestFormats = description.SupportedRequestFormats;
+        if (supportedRequestFormats.Count == 0)
+        {
+            // Assume "application/x-www-form-urlencoded" as the default media type
+            // to match the default assumed in IFormFeature.
+            supportedRequestFormats = [new ApiRequestFormat { MediaType = "application/x-www-form-urlencoded" }];
+        }
+
+        var requestBody = new OpenApiRequestBody
+        {
+            Required = formParameters.Any(parameter => parameter.IsRequired),
+            Content = new Dictionary<string, OpenApiMediaType>()
+        };
+
+        // Forms are represented as objects with properties for each form field.
+        var schema = new OpenApiSchema { Type = "object", Properties = new Dictionary<string, OpenApiSchema>() };
+        foreach (var parameter in formParameters)
+        {
+            schema.Properties[parameter.Name] = _componentService.GetOrCreateSchema(parameter.Type);
+        }
+
+        foreach (var requestForm in supportedRequestFormats)
+        {
+            var contentType = requestForm.MediaType;
+            requestBody.Content[contentType] = new OpenApiMediaType
+            {
+                Schema = schema,
+                Encoding = new Dictionary<string, OpenApiEncoding>() { [contentType] = _defaultFormEncoding }
+            };
+        }
+
+        return requestBody;
+    }
+
+    private static OpenApiRequestBody GetJsonRequestBody(ApiDescription description, ApiParameterDescription bodyParameter)
+    {
+        var supportedRequestFormats = description.SupportedRequestFormats;
+        if (supportedRequestFormats.Count == 0)
+        {
+            supportedRequestFormats = [new ApiRequestFormat { MediaType = "application/json" }];
+        }
+
+        var requestBody = new OpenApiRequestBody
+        {
+            Required = bodyParameter.IsRequired,
+            Content = new Dictionary<string, OpenApiMediaType>()
+        };
+
+        foreach (var requestForm in supportedRequestFormats)
+        {
+            var contentType = requestForm.MediaType;
+            requestBody.Content[contentType] = new OpenApiMediaType();
+        }
+
+        return requestBody;
     }
 }
