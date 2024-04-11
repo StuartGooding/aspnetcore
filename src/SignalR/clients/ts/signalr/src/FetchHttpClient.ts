@@ -91,14 +91,14 @@ export class FetchHttpClient extends HttpClient {
         try {
             response = await this._fetchType(request.url!, {
                 body: request.content,
-                cache: "no-cache",
-                credentials: request.withCredentials === true ? "include" : "same-origin",
+                ...('cache' in Request.prototype ? { cache: "no-cache" } : null),
+                ...('credentials in Request.prototype ? { credentials: request.withCredentials === true ? "include" : "same-origin" } : null),
                 headers: {
                     "X-Requested-With": "XMLHttpRequest",
                     ...request.headers,
                 },
                 method: request.method!,
-                mode: "cors",
+                ...('mode' in Request.prototype ? { mode: "cors" } : null),
                 redirect: "follow",
                 signal: abortController.signal,
             });
